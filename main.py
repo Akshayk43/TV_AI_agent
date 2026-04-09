@@ -2,16 +2,22 @@
 """AI Trading Agent — Main entry point.
 
 An OODA-loop AI agent powered by Claude Opus that:
+- Drives TradingView Desktop to write Pine Script and run backtests
 - Analyzes markets using price action, indicators, and volume profile
 - Reads candlestick charts visually to identify patterns
-- Creates TradingView Pine Script strategies
-- Backtests strategies and iteratively optimizes them
+- Iteratively optimizes strategies by reading TradingView backtest results
+
+Modes:
+  --mode tradingview   (default) Automate TradingView Desktop directly
+  --mode local         Use built-in backtester (no TradingView needed)
 
 Usage:
-    python main.py                          # Interactive mode
-    python main.py analyze AAPL             # Analyze a symbol
-    python main.py analyze BTCUSD 1h 90     # Symbol, timeframe, days
-    python main.py --no-optimize TSLA       # Skip optimization loop
+    python main.py                              # Interactive mode (TradingView)
+    python main.py analyze AAPL                 # Full OODA cycle on AAPL
+    python main.py analyze BTCUSD 1h 90         # Symbol, timeframe, days
+    python main.py --mode local analyze TSLA    # Local backtester mode
+    python main.py --no-optimize MSFT           # Skip optimization loop
+    python main.py mcp                          # Start MCP server (for Claude Code)
 """
 
 import argparse
@@ -27,13 +33,15 @@ from agent.ooda_agent import OODAAgent, InteractiveAgent
 from backtesting.metrics import format_metrics_report
 
 
-def print_banner():
-    print("""
+def print_banner(mode: str = "tradingview"):
+    mode_label = "TradingView Desktop" if mode == "tradingview" else "Local Backtester"
+    print(f"""
 ╔══════════════════════════════════════════════════════════════╗
 ║           AI TRADING AGENT — Powered by Claude Opus         ║
 ╠══════════════════════════════════════════════════════════════╣
 ║                                                              ║
 ║  OODA Loop: Observe → Orient → Decide → Act                 ║
+║  Mode: {mode_label:<52}║
 ║                                                              ║
 ║  Capabilities:                                               ║
 ║  • Visual chart analysis (candlestick pattern recognition)   ║
@@ -41,46 +49,57 @@ def print_banner():
 ║  • Technical indicators (RSI, MACD, BB, Stoch, ATR, etc.)   ║
 ║  • Volume profile analysis (POC, VAH, VAL, HVN, LVN)        ║
 ║  • Pine Script v5 strategy generation for TradingView        ║
-║  • Backtesting with performance metrics                      ║
-║  • Iterative strategy optimization                           ║
+║  • Deploy & backtest directly in TradingView Desktop         ║
+║  • Iterative strategy optimization via AI                    ║
 ║                                                              ║
 ╚══════════════════════════════════════════════════════════════╝
 """)
 
 
-def run_analysis(symbol: str, timeframe: str = "1d", period_days: int = 365, optimize: bool = True):
+def run_analysis(
+    symbol: str,
+    timeframe: str = "1d",
+    period_days: int = 365,
+    optimize: bool = True,
+    mode: str = "tradingview",
+):
     """Run a full OODA cycle analysis on a symbol."""
     print(f"\nStarting OODA cycle for {symbol} ({timeframe}, {period_days}d lookback)")
+    print(f"Mode: {mode}")
     print("=" * 60)
 
-    agent = OODAAgent(symbol=symbol, timeframe=timeframe, period_days=period_days)
+    agent = OODAAgent(symbol=symbol, timeframe=timeframe, period_days=period_days, mode=mode)
 
     def callback(phase, data):
         if phase == "start":
             print(f"\n{'='*60}")
-            print(f"  Analyzing: {data['symbol']} ({data['timeframe']})")
+            print(f"  Analyzing: {data['symbol']} ({data['timeframe']}) [{data['mode']}]")
             print(f"{'='*60}")
         elif phase == "observe":
             print(f"\n[1/4] OBSERVE — {data['status']}")
         elif phase == "observe_done":
-            print(f"  ✓ Loaded {data['bars']} bars of data")
+            bars = data['bars']
+            print(f"  Done ({bars} bars)" if bars else "  Done (visual only)")
         elif phase == "orient":
             print(f"\n[2/4] ORIENT — {data['status']}")
         elif phase == "orient_done":
-            print(f"  ✓ Analysis complete")
+            print(f"  Analysis complete")
         elif phase == "decide":
             print(f"\n[3/4] DECIDE — {data['status']}")
         elif phase == "decide_done":
-            print(f"  ✓ Strategy: {data['strategy_name']}")
+            print(f"  Strategy: {data['strategy_name']}")
         elif phase == "act":
             print(f"\n[4/4] ACT — {data['status']}")
         elif phase == "optimization_iteration":
-            m = data["metrics"]
-            print(
-                f"  Iteration {data['iteration']}: "
-                f"WR={m['win_rate']:.1%}  PF={m['profit_factor']:.2f}  "
-                f"Sharpe={m['sharpe_ratio']:.2f}  DD={m['max_drawdown_pct']:.1f}%"
-            )
+            if "metrics" in data:
+                m = data["metrics"]
+                print(
+                    f"  Iteration {data['iteration']}: "
+                    f"WR={m['win_rate']:.1%}  PF={m['profit_factor']:.2f}  "
+                    f"Sharpe={m['sharpe_ratio']:.2f}  DD={m['max_drawdown_pct']:.1f}%"
+                )
+            else:
+                print(f"  Iteration {data['iteration']}: results captured from TradingView")
 
     results = agent.run_full_cycle(optimize=optimize, callback=callback)
 
@@ -91,6 +110,10 @@ def run_analysis(symbol: str, timeframe: str = "1d", period_days: int = 365, opt
 
     if results["backtest_metrics"]:
         print(format_metrics_report(results["backtest_metrics"]))
+
+    if results.get("tv_backtest_results"):
+        from tradingview_mcp.screen_reader import format_results_for_agent
+        print(format_results_for_agent(results["tv_backtest_results"]))
 
     print(f"\nStrategy: {results['strategy'].get('name', 'Unknown')}")
     print(f"Description: {results['strategy'].get('description', '')}")
@@ -112,13 +135,15 @@ def run_analysis(symbol: str, timeframe: str = "1d", period_days: int = 365, opt
     return results
 
 
-def interactive_mode():
+def interactive_mode(mode: str = "tradingview"):
     """Run the agent in interactive conversational mode."""
-    print_banner()
+    print_banner(mode)
     print("Interactive Mode — Chat with the AI Trading Agent")
     print("Commands:")
     print("  analyze <SYMBOL> [timeframe] [days]  — Run full OODA analysis")
-    print("  optimize                             — Optimize current strategy")
+    print("  capture                              — Screenshot TradingView chart")
+    print("  results                              — Read TradingView backtest results")
+    print("  deploy                               — Re-deploy current Pine Script")
     print("  pine                                 — Show Pine Script")
     print("  strategy                             — Show current strategy")
     print("  metrics                              — Show backtest metrics")
@@ -127,7 +152,7 @@ def interactive_mode():
     print("-" * 60)
 
     agent = None
-    interactive = InteractiveAgent()
+    interactive = InteractiveAgent(mode=mode)
 
     while True:
         try:
@@ -151,15 +176,49 @@ def interactive_mode():
             timeframe = parts[2] if len(parts) > 2 else "1d"
             days = int(parts[3]) if len(parts) > 3 else 365
 
-            agent = OODAAgent(symbol=symbol, timeframe=timeframe, period_days=days)
-            interactive.agent = agent
-
             try:
-                results = run_analysis(symbol, timeframe, days)
+                results = run_analysis(symbol, timeframe, days, mode=mode)
+                agent = OODAAgent(symbol=symbol, timeframe=timeframe, period_days=days, mode=mode)
                 agent.strategy = results["strategy"]
+                agent.pine_script = results.get("pine_script", "")
                 agent.backtest_results = results.get("backtest_metrics")
+                agent.tv_backtest_results = results.get("tv_backtest_results")
+                interactive.agent = agent
             except Exception as e:
                 print(f"Error: {e}")
+                import traceback
+                traceback.print_exc()
+
+        elif lower == "capture" and mode == "tradingview":
+            try:
+                from tradingview_mcp.tv_controller import TradingViewController
+                from tradingview_mcp.screen_reader import analyze_chart
+                tv = TradingViewController()
+                b64 = tv.capture_chart_area()
+                analysis = analyze_chart(b64)
+                print(f"\n{analysis}")
+            except Exception as e:
+                print(f"Error capturing: {e}")
+
+        elif lower == "results" and mode == "tradingview":
+            try:
+                from tradingview_mcp.tv_controller import TradingViewController
+                from tradingview_mcp.screen_reader import read_backtest_results, format_results_for_agent
+                tv = TradingViewController()
+                b64 = tv.capture_backtest_overview()
+                results = read_backtest_results(b64)
+                print(format_results_for_agent(results))
+            except Exception as e:
+                print(f"Error reading results: {e}")
+
+        elif lower == "deploy" and agent and agent.pine_script:
+            try:
+                from tradingview_mcp.tv_controller import TradingViewController
+                tv = TradingViewController()
+                tv.deploy_strategy(agent.pine_script)
+                print("Strategy deployed to TradingView.")
+            except Exception as e:
+                print(f"Error deploying: {e}")
 
         elif lower == "pine" and agent and agent.pine_script:
             print("\n" + agent.pine_script)
@@ -167,8 +226,12 @@ def interactive_mode():
         elif lower == "strategy" and agent and agent.strategy:
             print(json.dumps(agent.strategy, indent=2))
 
-        elif lower == "metrics" and agent and agent.backtest_results:
-            print(format_metrics_report(agent.backtest_results["metrics"]))
+        elif lower == "metrics":
+            if agent and agent.backtest_results:
+                print(format_metrics_report(agent.backtest_results["metrics"]))
+            if agent and agent.tv_backtest_results:
+                from tradingview_mcp.screen_reader import format_results_for_agent
+                print(format_results_for_agent(agent.tv_backtest_results))
 
         else:
             # Free-form chat
@@ -179,26 +242,49 @@ def interactive_mode():
                 print(f"Error: {e}")
 
 
+def run_mcp_server():
+    """Start the TradingView MCP server for Claude Code integration."""
+    print("Starting TradingView MCP Server (stdio transport)...")
+    print("This server exposes TradingView Desktop automation as MCP tools.")
+    print("Connect via Claude Code or any MCP client.\n")
+
+    from tradingview_mcp.server import main as mcp_main
+    mcp_main()
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="AI Trading Agent — OODA loop powered by Claude Opus",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python main.py                          # Interactive mode
-  python main.py analyze AAPL             # Analyze Apple stock
-  python main.py analyze BTCUSD 1h 90     # BTC hourly, 90 days
-  python main.py analyze TSLA 1d 180      # Tesla daily, 180 days
-  python main.py --no-optimize MSFT       # Skip optimization
+  python main.py                              # Interactive mode (TradingView)
+  python main.py analyze AAPL                 # Full OODA on Apple via TradingView
+  python main.py analyze BTCUSD 1h 90         # BTC hourly, 90 days
+  python main.py --mode local analyze TSLA    # Use local backtester
+  python main.py --no-optimize MSFT           # Skip optimization
+  python main.py mcp                          # Start MCP server for Claude Code
         """,
     )
-    parser.add_argument("command", nargs="?", default=None, help="Command: 'analyze'")
-    parser.add_argument("symbol", nargs="?", default="AAPL", help="Ticker symbol (default: AAPL)")
-    parser.add_argument("timeframe", nargs="?", default="1d", help="Timeframe (default: 1d)")
-    parser.add_argument("days", nargs="?", type=int, default=365, help="Lookback days (default: 365)")
-    parser.add_argument("--no-optimize", action="store_true", help="Skip optimization loop")
+    parser.add_argument("command", nargs="?", default=None,
+                        help="Command: 'analyze', 'mcp'")
+    parser.add_argument("symbol", nargs="?", default="AAPL",
+                        help="Ticker symbol (default: AAPL)")
+    parser.add_argument("timeframe", nargs="?", default="1d",
+                        help="Timeframe (default: 1d)")
+    parser.add_argument("days", nargs="?", type=int, default=365,
+                        help="Lookback days (default: 365)")
+    parser.add_argument("--no-optimize", action="store_true",
+                        help="Skip optimization loop")
+    parser.add_argument("--mode", choices=["tradingview", "local"], default="tradingview",
+                        help="Mode: 'tradingview' (drive TV Desktop) or 'local' (built-in backtester)")
 
     args = parser.parse_args()
+
+    # MCP server mode — doesn't need API key validation
+    if args.command == "mcp":
+        run_mcp_server()
+        return
 
     # Validate API key
     if not ANTHROPIC_API_KEY:
@@ -208,23 +294,25 @@ Examples:
         sys.exit(1)
 
     if args.command == "analyze":
-        print_banner()
+        print_banner(args.mode)
         run_analysis(
             symbol=args.symbol,
             timeframe=args.timeframe,
             period_days=args.days,
             optimize=not args.no_optimize,
+            mode=args.mode,
         )
     elif args.command is None:
-        interactive_mode()
+        interactive_mode(mode=args.mode)
     else:
         # Treat command as symbol
-        print_banner()
+        print_banner(args.mode)
         run_analysis(
             symbol=args.command.upper(),
             timeframe=args.timeframe,
             period_days=args.days,
             optimize=not args.no_optimize,
+            mode=args.mode,
         )
 
 

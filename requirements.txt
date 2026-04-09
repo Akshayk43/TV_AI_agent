@@ -1,9 +1,27 @@
+# Core
 anthropic>=0.42.0
 pandas>=2.0.0
 numpy>=1.24.0
+python-dotenv>=1.0.0
+Pillow>=10.0.0
+
+# Chart rendering (local mode)
 mplfinance>=0.12.10b0
 matplotlib>=3.7.0
+
+# Market data
 yfinance>=0.2.30
-Pillow>=10.0.0
+
+# Display
 tabulate>=0.9.0
-python-dotenv>=1.0.0
+
+# TradingView Desktop automation
+pyautogui>=0.9.54
+pyperclip>=1.8.2
+
+# MCP Server
+mcp>=1.0.0
+
+# Platform-specific (install as needed):
+# Windows: pip install pygetwindow
+# Linux: sudo apt install wmctrl xdotool

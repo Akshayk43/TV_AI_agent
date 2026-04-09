@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "tradingview": {
+      "command": "python",
+      "args": ["-m", "tradingview_mcp.server"],
+      "cwd": "/path/to/TV_AI_agent",
+      "env": {
+        "ANTHROPIC_API_KEY": "your-api-key-here"
+      }
+    }
+  }
+}
