@@ -1,19 +1,27 @@
 """Strategy optimizer — iteratively improves strategies using Claude."""
 
 import json
+from typing import Callable, Optional
+
 import anthropic
 
 from config.settings import (
     ANTHROPIC_API_KEY,
     MODEL_NAME,
     MAX_OPTIMIZATION_ITERATIONS,
+    WALK_FORWARD_MAX_ITERATIONS,
     TARGET_WIN_RATE,
     TARGET_PROFIT_FACTOR,
     TARGET_SHARPE_RATIO,
+    WF_TRAIN_DAYS,
+    WF_TEST_DAYS,
+    WF_STEP_DAYS,
 )
 from agent.prompts.system_prompts import TRADING_AGENT_SYSTEM_PROMPT, STRATEGY_IMPROVEMENT_PROMPT
 from backtesting.engine import run_backtest
 from backtesting.metrics import format_metrics_report
+from backtesting.cost_model import CostModel
+from backtesting.walk_forward import walk_forward, format_walk_forward_report
 
 
 class StrategyOptimizer:
@@ -89,8 +97,13 @@ class StrategyOptimizer:
             "iterations": len(self.history),
         }
 
-    def _score_strategy(self, metrics: dict) -> float:
-        """Compute a composite score for ranking strategies."""
+    def _score_strategy(self, metrics: dict, is_oos_gap: Optional[dict] = None) -> float:
+        """Compute a composite score for ranking strategies.
+
+        If `is_oos_gap` is provided (walk-forward mode), penalize large IS→OOS
+        degradation — that's the single most reliable overfit signal on
+        minute-bar data.
+        """
         if metrics["total_trades"] < 5:
             return -100  # Penalize too few trades
 
@@ -101,7 +114,86 @@ class StrategyOptimizer:
         trade_score = min(metrics["total_trades"] / 20, 1) * 10
         return_score = min(max(metrics["total_return_pct"], -50), 100) * 0.5
 
-        return win_rate_score + pf_score + sharpe_score + dd_score + trade_score + return_score
+        base = win_rate_score + pf_score + sharpe_score + dd_score + trade_score + return_score
+
+        if is_oos_gap:
+            # Heavy penalty when OOS Sharpe is much worse than IS Sharpe
+            sharpe_gap = max(0, is_oos_gap.get("sharpe_ratio", 0))
+            pf_gap = max(0, is_oos_gap.get("profit_factor", 0))
+            base -= sharpe_gap * 15
+            base -= pf_gap * 10
+
+        return base
+
+    def optimize_walk_forward(
+        self,
+        df,
+        initial_strategy: dict,
+        cost_model: Optional[CostModel] = None,
+        session_filter: Optional[Callable] = None,
+        max_iterations: int = WALK_FORWARD_MAX_ITERATIONS,
+        train_days: int = WF_TRAIN_DAYS,
+        test_days: int = WF_TEST_DAYS,
+        step_days: int = WF_STEP_DAYS,
+        callback=None,
+    ) -> dict:
+        """Walk-forward optimization — scores on OOS metrics, not in-sample.
+
+        Each iteration runs a full rolling WF and asks Claude to improve the
+        strategy based on aggregate OOS performance. Best strategy is the one
+        with the highest OOS score after applying the IS→OOS gap penalty.
+        """
+        current_strategy = initial_strategy
+        best_strategy = initial_strategy
+        best_score = -float("inf")
+        best_wf = None
+
+        for iteration in range(1, max_iterations + 1):
+            wf = walk_forward(
+                df,
+                current_strategy,
+                train_days=train_days,
+                test_days=test_days,
+                step_days=step_days,
+                cost_model=cost_model,
+                session_filter=session_filter,
+            )
+            oos_metrics = wf["oos_metrics"]
+            gap = wf["is_oos_gap"]
+            score = self._score_strategy(oos_metrics, is_oos_gap=gap)
+
+            self.history.append({
+                "iteration": iteration,
+                "strategy": current_strategy,
+                "metrics": oos_metrics,
+                "is_oos_gap": gap,
+                "n_folds": wf["n_folds"],
+                "score": score,
+            })
+
+            if callback:
+                callback(iteration, current_strategy, wf)
+
+            if score > best_score:
+                best_score = score
+                best_strategy = current_strategy
+                best_wf = wf
+
+            if self._targets_met(oos_metrics):
+                break
+
+            improved = self._get_improvement(current_strategy, oos_metrics)
+            if improved:
+                current_strategy = improved
+            else:
+                break
+
+        return {
+            "best_strategy": best_strategy,
+            "best_wf": best_wf,
+            "history": self.history,
+            "iterations": len(self.history),
+        }
 
     def _targets_met(self, metrics: dict) -> bool:
         """Check if all target thresholds are met."""

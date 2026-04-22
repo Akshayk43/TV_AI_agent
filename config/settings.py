@@ -14,16 +14,28 @@ DEFAULT_SYMBOL = "AAPL"
 DEFAULT_TIMEFRAME = "1d"
 DEFAULT_LOOKBACK_DAYS = 365
 
-# Backtesting defaults
+# Backtesting defaults (equities-flavored)
 INITIAL_CAPITAL = 100_000.0
 COMMISSION_PCT = 0.001  # 0.1%
 SLIPPAGE_PCT = 0.0005   # 0.05%
 
+# XAUUSD-specific cost defaults. Used when routing a spot-gold backtest
+# through backtesting.cost_model.XAUUSDSpreadCost. Overridable per-run.
+XAUUSD_DEFAULT_SPREAD = 0.30     # USD per oz, typical retail
+XAUUSD_STRESS_SPREAD = 0.60      # 2× for stress tests
+XAUUSD_COMMISSION_PER_OZ = 0.0   # Non-ECN default
+
 # Strategy optimization
 MAX_OPTIMIZATION_ITERATIONS = 5
+WALK_FORWARD_MAX_ITERATIONS = 3   # Each iteration is a full WF run — expensive
 TARGET_WIN_RATE = 0.55
 TARGET_PROFIT_FACTOR = 1.5
 TARGET_SHARPE_RATIO = 1.0
+
+# Walk-forward defaults (in days)
+WF_TRAIN_DAYS = 60
+WF_TEST_DAYS = 10
+WF_STEP_DAYS = 10
 
 # Chart rendering
 CHART_WIDTH = 1600

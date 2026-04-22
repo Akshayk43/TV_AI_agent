@@ -131,8 +131,57 @@ def generate_sample_data(
     return df
 
 
+def _is_xauusd_symbol(symbol: str) -> bool:
+    s = symbol.upper().replace("=X", "").replace("/", "").replace("_", "").replace("-", "")
+    return s.startswith("XAUUSD") or s in ("GOLD", "XAU", "GCUSD")
+
+
 def get_market_data(symbol: str, period_days: int = DEFAULT_LOOKBACK_DAYS, interval: str = "1d") -> pd.DataFrame:
-    """High-level data retrieval — tries Yahoo Finance, falls back to synthetic data."""
+    """High-level data retrieval with instrument-aware routing.
+
+    For XAUUSD (spot gold), try OANDA first, then a local CSV cache, then yfinance.
+    Fail loudly rather than silently returning synthetic data — intraday gold
+    synthetics would hide every real bug in the strategy.
+
+    For other symbols, preserve legacy behavior: Yahoo → synthetic fallback.
+    """
+    if _is_xauusd_symbol(symbol):
+        errors = []
+
+        # 1. OANDA (preferred — clean 1m/5m bars back years)
+        try:
+            from backtesting.data_oanda import fetch_xauusd
+            return fetch_xauusd(days=period_days, interval=interval)
+        except Exception as e:
+            errors.append(f"OANDA: {e}")
+
+        # 2. Local CSV cache (Dukascopy-style)
+        import os
+        cache_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "data", "xauusd_csv",
+        )
+        if os.path.isdir(cache_dir):
+            try:
+                from backtesting.data_csv_xauusd import load_xauusd_csv_dir, resample_to
+                raw = load_xauusd_csv_dir(cache_dir)
+                return resample_to(raw, interval) if interval != "1m" else raw
+            except Exception as e:
+                errors.append(f"CSV: {e}")
+
+        # 3. yfinance GC=F (futures proxy — limited intraday history)
+        try:
+            return load_from_yahoo("GC=F", period_days, interval)
+        except Exception as e:
+            errors.append(f"yfinance: {e}")
+
+        raise RuntimeError(
+            f"Could not load XAUUSD data from any source. Tried:\n  "
+            + "\n  ".join(errors)
+            + "\nSet OANDA_API_KEY or drop CSVs in data/xauusd_csv/."
+        )
+
+    # Non-XAUUSD: legacy path
     try:
         return load_from_yahoo(symbol, period_days, interval)
     except Exception as e:

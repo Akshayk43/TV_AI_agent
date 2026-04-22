@@ -1,0 +1,33 @@
+{
+  "name": "XAUUSD Session Breakout (ORB-proxy)",
+  "description": "Session-anchored momentum breakout on spot gold. Intended to run with a session filter restricting entries to LONDON_OPEN and NY_AM windows. Enters long when close breaks above the 20-period EMA with above-average volume and price also above VWAP; mirrored short. ATR-anchored risk. This is a v1 proxy for a true opening-range breakout; a true ORB requires engine-level opening-range tracking per session.",
+  "symbol": "XAUUSD",
+  "timeframe": "5m",
+  "rules": {
+    "long_entry": [
+      {"indicator": "close", "operator": "crosses_above", "ref": "ema_20"},
+      {"indicator": "close", "operator": ">", "ref": "vwap"},
+      {"indicator": "volume", "operator": ">", "ref": "volume_sma_20"}
+    ],
+    "long_exit": [
+      {"indicator": "close", "operator": "crosses_below", "ref": "ema_20"}
+    ],
+    "short_entry": [
+      {"indicator": "close", "operator": "crosses_below", "ref": "ema_20"},
+      {"indicator": "close", "operator": "<", "ref": "vwap"},
+      {"indicator": "volume", "operator": ">", "ref": "volume_sma_20"}
+    ],
+    "short_exit": [
+      {"indicator": "close", "operator": "crosses_above", "ref": "ema_20"}
+    ]
+  },
+  "risk_management": {
+    "stop_loss_pct": 0.25,
+    "take_profit_pct": 0.50,
+    "position_size_pct": 2.0,
+    "max_positions": 1
+  },
+  "session_config": {
+    "allowed_sessions": ["LONDON_OPEN", "NY_AM"]
+  }
+}

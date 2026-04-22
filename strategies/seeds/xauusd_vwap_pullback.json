@@ -1,0 +1,35 @@
+{
+  "name": "XAUUSD Trend-day VWAP Pullback",
+  "description": "On trending session days, look for pullbacks to VWAP in the direction of the EMA(50) trend. Long when close is above EMA(50) and crosses back up through VWAP after a dip; mirrored short. Expects to trade fewer but higher-quality setups than the breakout seed.",
+  "symbol": "XAUUSD",
+  "timeframe": "5m",
+  "rules": {
+    "long_entry": [
+      {"indicator": "close", "operator": ">", "ref": "ema_50"},
+      {"indicator": "close", "operator": "crosses_above", "ref": "vwap"},
+      {"indicator": "rsi_14", "operator": ">", "value": 45},
+      {"indicator": "rsi_14", "operator": "<", "value": 65}
+    ],
+    "long_exit": [
+      {"indicator": "close", "operator": "crosses_below", "ref": "ema_20"}
+    ],
+    "short_entry": [
+      {"indicator": "close", "operator": "<", "ref": "ema_50"},
+      {"indicator": "close", "operator": "crosses_below", "ref": "vwap"},
+      {"indicator": "rsi_14", "operator": "<", "value": 55},
+      {"indicator": "rsi_14", "operator": ">", "value": 35}
+    ],
+    "short_exit": [
+      {"indicator": "close", "operator": "crosses_above", "ref": "ema_20"}
+    ]
+  },
+  "risk_management": {
+    "stop_loss_pct": 0.30,
+    "take_profit_pct": 0.60,
+    "position_size_pct": 2.0,
+    "max_positions": 1
+  },
+  "session_config": {
+    "allowed_sessions": ["LONDON_OPEN", "NY_AM"]
+  }
+}

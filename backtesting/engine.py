@@ -1,11 +1,14 @@
 """Backtesting engine — executes strategy rules on historical OHLCV data."""
 
 import json
+from typing import Callable, Optional
+
 import numpy as np
 import pandas as pd
 
 from knowledge.indicators import add_all_indicators
 from backtesting.metrics import compute_metrics
+from backtesting.cost_model import CostModel, PercentCost
 from config.settings import INITIAL_CAPITAL, COMMISSION_PCT, SLIPPAGE_PCT
 
 
@@ -37,10 +40,18 @@ class BacktestEngine:
         initial_capital: float = INITIAL_CAPITAL,
         commission_pct: float = COMMISSION_PCT,
         slippage_pct: float = SLIPPAGE_PCT,
+        cost_model: Optional[CostModel] = None,
+        session_filter: Optional[Callable[[pd.Timestamp], bool]] = None,
     ):
         self.initial_capital = initial_capital
         self.commission_pct = commission_pct
         self.slippage_pct = slippage_pct
+        # If no explicit cost_model is passed, mirror the legacy percent-based behavior
+        # using the caller's commission_pct / slippage_pct values.
+        self.cost_model = cost_model or PercentCost(
+            commission_pct=commission_pct, slippage_pct=slippage_pct
+        )
+        self.session_filter = session_filter
 
     def run(self, df: pd.DataFrame, strategy: dict) -> dict:
         """Run the backtest.
@@ -100,11 +111,8 @@ class BacktestEngine:
                         exit_reason = "signal_exit"
 
                 if exit_price is not None:
-                    # Apply slippage
-                    if pos["direction"] == "long":
-                        exit_price *= (1 - self.slippage_pct)
-                    else:
-                        exit_price *= (1 + self.slippage_pct)
+                    # Apply cost model (spread + commission) via the configured model
+                    exit_price = self.cost_model.exit_price(exit_price, pos["direction"])
 
                     # Compute PnL
                     if pos["direction"] == "long":
@@ -112,7 +120,7 @@ class BacktestEngine:
                     else:
                         pnl = (pos["entry_price"] - exit_price) * pos["size"]
 
-                    commission = exit_price * pos["size"] * self.commission_pct
+                    commission = self.cost_model.commission(exit_price, pos["size"])
                     pnl -= commission
                     equity += pnl
 
@@ -135,13 +143,18 @@ class BacktestEngine:
                 open_positions.remove(pos)
 
             # ── Check entries ─────────────────────────────────────────────
-            if len(open_positions) < max_positions:
+            # Session filter only gates new entries; it never blocks exits.
+            entries_allowed = (
+                len(open_positions) < max_positions
+                and (self.session_filter is None or self.session_filter(date))
+            )
+            if entries_allowed:
                 # Long entry
                 if rules.get("long_entry") and self._check_conditions(rules["long_entry"], df, i):
-                    entry_price = row["close"] * (1 + self.slippage_pct)
+                    entry_price = self.cost_model.entry_price(row["close"], "long")
                     size_value = equity * position_size_pct
                     size = size_value / entry_price
-                    commission = entry_price * size * self.commission_pct
+                    commission = self.cost_model.commission(entry_price, size)
                     equity -= commission
 
                     open_positions.append({
@@ -156,10 +169,10 @@ class BacktestEngine:
 
                 # Short entry
                 elif rules.get("short_entry") and self._check_conditions(rules["short_entry"], df, i):
-                    entry_price = row["close"] * (1 - self.slippage_pct)
+                    entry_price = self.cost_model.entry_price(row["close"], "short")
                     size_value = equity * position_size_pct
                     size = size_value / entry_price
-                    commission = entry_price * size * self.commission_pct
+                    commission = self.cost_model.commission(entry_price, size)
                     equity -= commission
 
                     open_positions.append({
@@ -294,7 +307,16 @@ class BacktestEngine:
         return True
 
 
-def run_backtest(df: pd.DataFrame, strategy: dict) -> dict:
-    """Convenience function to run a backtest with default settings."""
-    engine = BacktestEngine()
+def run_backtest(
+    df: pd.DataFrame,
+    strategy: dict,
+    cost_model: Optional[CostModel] = None,
+    session_filter: Optional[Callable[[pd.Timestamp], bool]] = None,
+) -> dict:
+    """Convenience function to run a backtest.
+
+    Pass an optional cost_model (e.g. XAUUSDSpreadCost) and session_filter
+    for instrument-accurate backtests. Defaults preserve legacy behavior.
+    """
+    engine = BacktestEngine(cost_model=cost_model, session_filter=session_filter)
     return engine.run(df, strategy)

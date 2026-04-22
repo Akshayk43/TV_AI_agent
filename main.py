@@ -278,12 +278,39 @@ Examples:
                         help="Skip optimization loop")
     parser.add_argument("--mode", choices=["tradingview", "local"], default="tradingview",
                         help="Mode: 'tradingview' (drive TV Desktop) or 'local' (built-in backtester)")
+    parser.add_argument("--walk-forward", action="store_true",
+                        help="Run walk-forward OOS validation on XAUUSD seed strategies")
+    parser.add_argument("--spread", type=float, default=None,
+                        help="XAUUSD spread in USD per oz for cost model (default: config XAUUSD_DEFAULT_SPREAD)")
+    parser.add_argument("--stress", action="store_true",
+                        help="After walk-forward, re-run best strategy with stress spread")
 
     args = parser.parse_args()
 
     # MCP server mode — doesn't need API key validation
     if args.command == "mcp":
         run_mcp_server()
+        return
+
+    # Walk-forward XAUUSD mode — bypasses the OODA cycle
+    if args.walk_forward:
+        from agent.xauusd_runner import run_xauusd_cycle, run_stress_test
+        from config.settings import XAUUSD_DEFAULT_SPREAD, XAUUSD_STRESS_SPREAD
+
+        spread = args.spread if args.spread is not None else XAUUSD_DEFAULT_SPREAD
+        print(f"\nRunning walk-forward on XAUUSD seed strategies...")
+        print(f"  Timeframe: {args.timeframe}   Period: {args.days}d   Spread: ${spread}/oz\n")
+        result = run_xauusd_cycle(
+            timeframe=args.timeframe,
+            period_days=args.days,
+            spread=spread,
+        )
+        print(result["report"])
+
+        if args.stress and result.get("best"):
+            print(f"\n=== Stress test (spread ${XAUUSD_STRESS_SPREAD}/oz) ===\n")
+            stressed = run_stress_test(result, stress_spread=XAUUSD_STRESS_SPREAD)
+            print(stressed["report"])
         return
 
     # Validate API key
